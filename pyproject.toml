@@ -1,0 +1,43 @@
+[project]
+name = "solax-predbat-dash"
+version = "0.1.0"
+description = "Historical SolaX ingestion and metrics for a home energy intelligence platform."
+requires-python = ">=3.12"
+dependencies = [
+  "openpyxl",
+  "pandas",
+  "pyarrow",
+  "pydantic",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pre-commit",
+  "pyright",
+  "ruff",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests", "scripts"]
+exclude = [
+  ".git",
+  ".venv",
+  "__pycache__",
+  "config",
+  "dat",
+  "data/raw",
+  "data/processed",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+  "E501",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

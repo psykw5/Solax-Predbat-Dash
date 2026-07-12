@@ -1,0 +1,47 @@
+# Local environment files
+.env
+.env.*
+!.env.example
+
+# Home Assistant secrets and credentials
+config/secrets.yaml
+config/.storage/
+config/.cloud/
+config/auth/
+config/known_devices.yaml
+
+# Home Assistant runtime data
+config/home-assistant.log*
+config/home-assistant_v2.db*
+config/*.db
+config/*.db-*
+config/deps/
+config/tts/
+config/blueprints/
+config/backups/
+config/.HA_VERSION
+config/.ha_run.lock
+
+# Python and test cache files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pre-commit-cache*/
+.coverage
+htmlcov/
+
+# Local energy data
+dat/
+data/raw/**
+!data/raw/
+!data/raw/solax/
+!data/raw/solax/.gitkeep
+data/processed/**
+!data/processed/
+!data/processed/.gitkeep
+
+# Editor and OS files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
