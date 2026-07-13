@@ -39,6 +39,13 @@ data/raw/**
 data/processed/**
 !data/processed/
 !data/processed/.gitkeep
+data/live/**
+data/public/*.json
+*.sqlite
+*.sqlite-*
+*.db-journal
+*.db-wal
+*.db-shm
 
 # Editor and OS files
 .vscode/
