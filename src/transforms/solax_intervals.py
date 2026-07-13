@@ -92,6 +92,18 @@ def cumulative_to_intervals(raw_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Data
             )
 
         interval_df["quality_flags"] = quality_flags.fillna("")
+        zero_duration_mask = interval_df["interval_start"] >= interval_df["interval_end"]
+        for _, row in interval_df[zero_duration_mask].iterrows():
+            events.append(
+                quality_event(
+                    "zero_duration_daily_baseline",
+                    row["interval_end"],
+                    "First cumulative reading for the day has no positive-duration interval and is excluded.",
+                    source_filename=source_filename,
+                    severity="warning",
+                )
+            )
+        interval_df = interval_df[~zero_duration_mask].copy()
         interval_frames.append(interval_df)
 
     canonical = (
