@@ -1,0 +1,10 @@
+[Unit]
+Description=Wattson public dashboard update
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/wattson/Solax-Predbat-Dash
+EnvironmentFile=/opt/wattson/Solax-Predbat-Dash/.env
+ExecStart=/usr/bin/python3 -m src.live update-public-dashboard

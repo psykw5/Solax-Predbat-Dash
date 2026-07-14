@@ -117,6 +117,16 @@ class EnergyMetrics:
             **totals,
         )
 
+    def coverage_range(self) -> tuple[datetime, datetime]:
+        """Return the first interval start and last interval end in the dataset."""
+        data = self._load()
+        if data.empty:
+            raise ValueError("Processed interval parquet contains no intervals.")
+        return (
+            data["interval_start"].min().to_pydatetime(),
+            data["interval_end"].max().to_pydatetime(),
+        )
+
     def _total(
         self,
         metric: str,

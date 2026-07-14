@@ -89,6 +89,16 @@ class EnergyMetricsTests(unittest.TestCase):
             self.assertEqual(generation.interval_count, 3)
             self.assertEqual(generation.quality_flagged_interval_count, 1)
 
+    def test_coverage_range_returns_dataset_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parquet = Path(temp_dir) / "processed.parquet"
+            write_processed_parquet(parquet)
+
+            start, end = EnergyMetrics(parquet).coverage_range()
+
+            self.assertEqual(start, datetime(2026, 1, 1, 0, 0))
+            self.assertEqual(end, datetime(2026, 2, 1, 0, 5))
+
     def test_self_consumption_returns_typed_ratio(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             parquet = Path(temp_dir) / "processed.parquet"

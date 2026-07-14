@@ -68,6 +68,13 @@ class LiveStore:
                 observed_at text not null,
                 primary key (event_type, observed_at, message)
             );
+            create table if not exists publication_runs (
+                published_at text not null primary key,
+                source_snapshot_hash text not null,
+                website_commit_hash text,
+                status text not null,
+                message text not null
+            );
             """
         )
         self.connection.commit()
@@ -182,6 +189,26 @@ class LiveStore:
         self.connection.execute(
             "insert or ignore into quality_events values (?, ?, ?, ?)",
             (event.event_type, event.severity, event.message, event.observed_at.isoformat()),
+        )
+        self.connection.commit()
+
+    def insert_publication_run(
+        self,
+        published_at: datetime,
+        source_snapshot_hash: str,
+        website_commit_hash: str | None,
+        status: str,
+        message: str,
+    ) -> None:
+        self.connection.execute(
+            "insert or replace into publication_runs values (?, ?, ?, ?, ?)",
+            (
+                published_at.isoformat(),
+                source_snapshot_hash,
+                website_commit_hash,
+                status,
+                message,
+            ),
         )
         self.connection.commit()
 

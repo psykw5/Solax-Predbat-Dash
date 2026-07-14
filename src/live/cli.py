@@ -9,6 +9,12 @@ from datetime import UTC, datetime, timedelta
 from live.config import assert_private_outputs_ignored, public_delay_minutes
 from live.models import CollectorRun, QualityEvent
 from live.octopus import refresh_octopus_tariffs
+from live.publish import (
+    build_monthly_public_snapshot,
+    publish_monthly_summary,
+    publish_public_snapshot,
+    update_lock,
+)
 from live.snapshot import build_public_snapshot
 from live.solax import collect_solax_observation
 from live.store import LiveStore
@@ -20,6 +26,10 @@ def main() -> int:
     subparsers.add_parser("collect-solax")
     subparsers.add_parser("refresh-octopus")
     subparsers.add_parser("build-public-snapshot")
+    subparsers.add_parser("publish-public-snapshot")
+    subparsers.add_parser("publish-monthly-summary")
+    subparsers.add_parser("publish-website")
+    subparsers.add_parser("update-public-dashboard")
     subparsers.add_parser("run")
     args = parser.parse_args()
 
@@ -32,6 +42,14 @@ def main() -> int:
             return command_refresh_octopus(store)
         if args.command == "build-public-snapshot":
             return command_build_public_snapshot(store)
+        if args.command == "publish-public-snapshot":
+            return command_publish_public_snapshot()
+        if args.command == "publish-monthly-summary":
+            return command_publish_monthly_summary(store)
+        if args.command == "publish-website":
+            return command_publish_website(store)
+        if args.command == "update-public-dashboard":
+            return command_update_public_dashboard(store)
         return command_run(store)
     finally:
         store.close()
@@ -127,6 +145,103 @@ def command_run(store: LiveStore) -> int:
     if solax_status != 0 or octopus_status != 0:
         return 1
     return command_build_public_snapshot(store)
+
+
+def command_publish_public_snapshot() -> int:
+    try:
+        result = publish_public_snapshot()
+    except Exception as exc:
+        print(
+            json.dumps(
+                {"publisher": "public_snapshot", "status": "failed", "message": type(exc).__name__}
+            )
+        )
+        return 1
+    print(
+        json.dumps(
+            {
+                "publisher": "public_snapshot",
+                "status": result.status,
+                "message": result.message,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def command_publish_website(store: LiveStore) -> int:
+    return command_publish_monthly_summary(store)
+
+
+def command_publish_monthly_summary(store: LiveStore) -> int:
+    try:
+        build_monthly_public_snapshot()
+        result = publish_monthly_summary(store=store)
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "publisher": "monthly_summary",
+                    "status": "failed",
+                    "message": type(exc).__name__,
+                }
+            )
+        )
+        return 1
+    print(
+        json.dumps(
+            {
+                "publisher": "monthly_summary",
+                "status": result.status,
+                "message": result.message,
+                "website_commit_hash": result.website_commit_hash,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def command_update_public_dashboard(store: LiveStore) -> int:
+    try:
+        with update_lock():
+            solax_status = command_collect_solax(store)
+            if solax_status != 0:
+                return 1
+            last_octopus = store.last_successful_run("octopus")
+            if last_octopus is None or datetime.now(UTC) - last_octopus >= timedelta(hours=24):
+                octopus_status = command_refresh_octopus(store)
+                if octopus_status != 0:
+                    return 1
+            snapshot_status = command_build_public_snapshot(store)
+            if snapshot_status != 0:
+                return 1
+            build_monthly_public_snapshot()
+            result = publish_monthly_summary(store=store, use_lock=False)
+    except Exception as exc:
+        print(
+            json.dumps(
+                {
+                    "publisher": "public_dashboard",
+                    "status": "failed",
+                    "message": type(exc).__name__,
+                }
+            )
+        )
+        return 1
+    print(
+        json.dumps(
+            {
+                "publisher": "public_dashboard",
+                "status": result.status,
+                "message": result.message,
+                "website_commit_hash": result.website_commit_hash,
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
 
 
 def run(collector: str, started: datetime, status: str, message: str) -> CollectorRun:
