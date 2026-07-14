@@ -73,3 +73,40 @@ This document describes the current SolaX historical-ingestion validation rules.
 - **Processing continues**: Yes.
 - **Downstream treatment**: Measures with zero mismatches are suitable for dashboard totals. Measures with mismatches remain provisional until reviewed.
 - **Synthetic example**: Reconstructed PV intervals total `8.6 kWh`, matching the final daily PV counter of `8.6 kWh`.
+
+## SolaX Reported Consumption
+
+SolaX Plant Reports expose `Daily consumed(kWh)`. Wattson preserves this source
+counter as `reported_inverter_consumption_kwh` for diagnostics and data-quality
+analysis, but it is not the canonical household-consumption metric.
+
+The current historical dataset indicates that this counter behaves like an
+inverter-reported consumption value and appears to include battery or inverter
+throughput. It reconciles much more closely with:
+
+```text
+reported inverter consumption ~= inverter output - export + import
+```
+
+than with the household physical-energy identity:
+
+```text
+household_consumption_kwh =
+  max(generation_kwh - export_kwh, 0) + grid_import_kwh
+```
+
+For dashboard and public aggregate metrics, Wattson derives canonical household
+consumption from the physical balance above. The raw inverter-reported counter is
+retained separately because it remains useful for diagnosing inverter behaviour,
+battery throughput effects and source-data anomalies.
+
+Current reconciled lifetime figures:
+
+| Metric | Value |
+| --- | ---: |
+| generation | `22861.680 kWh` |
+| export | `12420.450 kWh` |
+| self-consumed generation | `10441.230 kWh` |
+| grid import | `10765.400 kWh` |
+| canonical household consumption | `21206.630 kWh` |
+| reported inverter consumption | `23897.980 kWh` |

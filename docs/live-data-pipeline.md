@@ -111,7 +111,12 @@ The monthly public summary may contain only:
 - annual summaries;
 - high-level data-quality status.
 
-It excludes live PV power, battery state, battery flow, grid flow, today's generation, current or next tariff rates, exact observation timestamps, freshness minutes, raw endpoints, filenames, local paths and any daily or sub-daily household activity.
+It excludes live PV power, battery state, battery flow, grid flow, today's generation, current or next tariff rates, exact observation timestamps, freshness minutes, raw endpoints, filenames, local paths, raw SolaX inverter-reported consumption and any daily or sub-daily household activity.
+
+Physical energy values in the monthly public summary come from the canonical
+SolaX metrics layer. Financial values come from the tariff-covered financial
+layer. Missing tariff coverage never removes valid physical generation, export
+or self-consumed energy from lifetime physical totals.
 
 Publication is permitted only when:
 

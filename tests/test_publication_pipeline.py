@@ -89,6 +89,8 @@ class PublicationPipelineTests(unittest.TestCase):
             self.assertEqual(snapshot["lifetime_export_kwh"], 500.0)
             self.assertEqual(snapshot["lifetime_self_consumed_energy_kwh"], 900.0)
             self.assertEqual(snapshot["monthly_generation_kwh"], 400.0)
+            self.assertNotIn("household_consumption_kwh", snapshot)
+            self.assertNotIn("reported_inverter_consumption_kwh", snapshot)
 
     def test_public_energy_lifetime_uses_metrics_not_tariff_covered_financial_rows(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -449,14 +451,16 @@ def write_public_energy_inputs(root: Path) -> Path:
     parquet = root / "solax_intervals.parquet"
     pd.DataFrame(
         [
-            energy_interval("2026-05-01 00:00:00", "2026-05-01 00:05:00", 1000.0, 300.0),
-            energy_interval("2026-06-01 00:00:00", "2026-06-01 00:05:00", 400.0, 200.0),
+            energy_interval("2026-05-01 00:00:00", "2026-05-01 00:05:00", 1000.0, 300.0, 9999.0),
+            energy_interval("2026-06-01 00:00:00", "2026-06-01 00:05:00", 400.0, 200.0, 8888.0),
         ]
     ).to_parquet(parquet, index=False)
     return parquet
 
 
-def energy_interval(start: str, end: str, generation: float, exported: float) -> dict[str, object]:
+def energy_interval(
+    start: str, end: str, generation: float, exported: float, reported_consumed: float
+) -> dict[str, object]:
     return {
         "interval_start": pd.Timestamp(start),
         "interval_end": pd.Timestamp(end),
@@ -466,7 +470,7 @@ def energy_interval(start: str, end: str, generation: float, exported: float) ->
         "pv_yield_kwh": generation,
         "inverter_output_kwh": generation,
         "exported_energy_kwh": exported,
-        "consumed_energy_kwh": generation - exported,
+        "consumed_energy_kwh": reported_consumed,
         "imported_energy_kwh": 0.0,
         "quality_flags": "",
     }

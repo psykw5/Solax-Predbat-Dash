@@ -65,11 +65,19 @@ This resolves standard-variable duplicate payment-method rows without treating t
 For each supported settlement half-hour:
 
 - `estimated self-consumed solar = max(generation - export, 0)`
+- `household consumption = estimated self-consumed solar + grid import`
 - `avoided import value = estimated self-consumed solar x applicable import unit rate`
 - `export income = exported energy x applicable export unit rate`
 - `total financial benefit = avoided import value + export income`
 
 Octopus unit rates are pence per kWh including VAT, so values are divided by 100 to produce pounds.
+
+SolaX Plant Reports also include `Daily consumed(kWh)`. Wattson preserves that
+source counter as `reported_inverter_consumption_kwh` for diagnostics, but it is
+not used as canonical household consumption. The historical data shows it is an
+inverter-reported counter that appears to include battery or inverter throughput,
+so canonical household consumption is derived from the physical balance between
+PV generation, export and grid import.
 
 ## Exclusions
 

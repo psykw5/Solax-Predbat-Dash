@@ -78,14 +78,20 @@ class EnergyMetricsTests(unittest.TestCase):
             generation = metrics.total_generation("2026-01-01", "2026-01-02")
             imported = metrics.total_import("2026-01-01", "2026-01-02")
             exported = metrics.total_export("2026-01-01", "2026-01-02")
-            consumed = metrics.total_consumption("2026-01-01", "2026-01-02")
+            consumed = metrics.total_household_consumption("2026-01-01", "2026-01-02")
+            legacy_consumed = metrics.total_consumption("2026-01-01", "2026-01-02")
+            reported_consumed = metrics.total_reported_inverter_consumption(
+                "2026-01-01", "2026-01-02"
+            )
 
             self.assertIsInstance(generation, EnergyTotal)
             self.assertIsInstance(generation, BaseModel)
             self.assertEqual(generation.kwh, 0.8)
             self.assertEqual(imported.kwh, 0.7)
             self.assertEqual(exported.kwh, 0.3)
-            self.assertEqual(consumed.kwh, 1.7)
+            self.assertEqual(consumed.kwh, 1.2)
+            self.assertEqual(legacy_consumed.kwh, consumed.kwh)
+            self.assertEqual(reported_consumed.kwh, 1.7)
             self.assertEqual(generation.interval_count, 3)
             self.assertEqual(generation.quality_flagged_interval_count, 1)
 
@@ -136,7 +142,9 @@ class EnergyMetricsTests(unittest.TestCase):
             self.assertEqual(summary.generation_kwh, 0.8)
             self.assertEqual(summary.import_kwh, 0.7)
             self.assertEqual(summary.export_kwh, 0.3)
-            self.assertEqual(summary.consumption_kwh, 1.7)
+            self.assertEqual(summary.household_consumption_kwh, 1.2)
+            self.assertEqual(summary.reported_inverter_consumption_kwh, 1.7)
+            self.assertEqual(summary.consumption_kwh, summary.household_consumption_kwh)
             self.assertEqual(summary.interval_count, 3)
             self.assertEqual(summary.quality_flagged_interval_count, 1)
 
@@ -152,7 +160,8 @@ class EnergyMetricsTests(unittest.TestCase):
             self.assertEqual(summary.generation_kwh, 1.8)
             self.assertEqual(summary.import_kwh, 0.7)
             self.assertEqual(summary.export_kwh, 0.7)
-            self.assertEqual(summary.consumption_kwh, 2.5)
+            self.assertEqual(summary.household_consumption_kwh, 1.8)
+            self.assertEqual(summary.reported_inverter_consumption_kwh, 2.5)
             self.assertEqual(summary.interval_count, 4)
             self.assertEqual(len(summary.days), 31)
             self.assertEqual(summary.days[0].date, date(2026, 1, 1))
@@ -169,11 +178,56 @@ class EnergyMetricsTests(unittest.TestCase):
             self.assertEqual(summary.generation_kwh, 3.8)
             self.assertEqual(summary.import_kwh, 1.2)
             self.assertEqual(summary.export_kwh, 1.5)
-            self.assertEqual(summary.consumption_kwh, 4.2)
+            self.assertEqual(summary.household_consumption_kwh, 3.5)
+            self.assertEqual(summary.reported_inverter_consumption_kwh, 4.2)
             self.assertEqual(summary.interval_count, 5)
             self.assertEqual(len(summary.months), 12)
             self.assertEqual(summary.months[0].generation_kwh, 1.8)
             self.assertEqual(summary.months[1].generation_kwh, 2.0)
+
+    def test_consumption_is_derived_from_self_consumed_generation_plus_import(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parquet = Path(temp_dir) / "processed.parquet"
+            frame = synthetic_intervals()
+            frame.loc[:, "consumed_energy_kwh"] = [100.0, 100.0, 100.0, 100.0, 100.0]
+            write_processed_parquet(parquet, frame)
+            metrics = EnergyMetrics(parquet)
+
+            consumed = metrics.total_household_consumption("2026-01-01", "2026-01-02")
+            self_consumed = metrics.self_consumption("2026-01-01", "2026-01-02")
+            imported = metrics.total_import("2026-01-01", "2026-01-02")
+            reported_consumed = metrics.total_reported_inverter_consumption(
+                "2026-01-01", "2026-01-02"
+            )
+
+            self.assertEqual(consumed.kwh, 1.2)
+            self.assertEqual(consumed.kwh, self_consumed.self_consumed_kwh + imported.kwh)
+            self.assertEqual(reported_consumed.kwh, 300.0)
+
+    def test_energy_balances_reconcile_within_rounding_tolerance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            parquet = Path(temp_dir) / "processed.parquet"
+            write_processed_parquet(parquet)
+            metrics = EnergyMetrics(parquet)
+            start = "2026-01-01"
+            end = "2026-02-02"
+
+            generation = metrics.total_generation(start, end)
+            exported = metrics.total_export(start, end)
+            imported = metrics.total_import(start, end)
+            household_consumption = metrics.total_household_consumption(start, end)
+            self_consumed = metrics.self_consumption(start, end)
+
+            self.assertAlmostEqual(
+                self_consumed.self_consumed_kwh + exported.kwh,
+                generation.kwh,
+                places=6,
+            )
+            self.assertAlmostEqual(
+                self_consumed.self_consumed_kwh + imported.kwh,
+                household_consumption.kwh,
+                places=6,
+            )
 
     def test_range_is_start_inclusive_and_end_exclusive_by_full_interval(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

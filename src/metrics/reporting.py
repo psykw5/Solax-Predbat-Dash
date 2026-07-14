@@ -116,7 +116,8 @@ def build_monthly_metrics(metrics: EnergyMetrics, intervals: pd.DataFrame) -> pd
                 "generation_kwh": summary.generation_kwh,
                 "import_kwh": summary.import_kwh,
                 "export_kwh": summary.export_kwh,
-                "consumption_kwh": summary.consumption_kwh,
+                "household_consumption_kwh": summary.household_consumption_kwh,
+                "reported_inverter_consumption_kwh": summary.reported_inverter_consumption_kwh,
                 "self_consumed_kwh": summary.self_consumed_kwh,
                 "self_consumption_percent": summary.self_consumption_percent,
                 "interval_count": summary.interval_count,
@@ -137,7 +138,8 @@ def build_annual_metrics(metrics: EnergyMetrics, intervals: pd.DataFrame) -> pd.
                 "generation_kwh": summary.generation_kwh,
                 "import_kwh": summary.import_kwh,
                 "export_kwh": summary.export_kwh,
-                "consumption_kwh": summary.consumption_kwh,
+                "household_consumption_kwh": summary.household_consumption_kwh,
+                "reported_inverter_consumption_kwh": summary.reported_inverter_consumption_kwh,
                 "self_consumed_kwh": summary.self_consumed_kwh,
                 "self_consumption_percent": summary.self_consumption_percent,
                 "interval_count": summary.interval_count,
@@ -165,7 +167,10 @@ def render_report(
     generation = metrics.total_generation(lifetime_start, lifetime_end)
     imported = metrics.total_import(lifetime_start, lifetime_end)
     exported = metrics.total_export(lifetime_start, lifetime_end)
-    consumed = metrics.total_consumption(lifetime_start, lifetime_end)
+    household_consumption = metrics.total_household_consumption(lifetime_start, lifetime_end)
+    reported_inverter_consumption = metrics.total_reported_inverter_consumption(
+        lifetime_start, lifetime_end
+    )
     self_consumption = metrics.self_consumption(lifetime_start, lifetime_end)
 
     event_counts = event_count_table(validation)
@@ -200,7 +205,8 @@ def render_report(
             f"- Lifetime generation: `{generation.kwh:.3f} kWh`",
             f"- Lifetime import: `{imported.kwh:.3f} kWh`",
             f"- Lifetime export: `{exported.kwh:.3f} kWh`",
-            f"- Lifetime consumption: `{consumed.kwh:.3f} kWh`",
+            f"- Lifetime household consumption: `{household_consumption.kwh:.3f} kWh`",
+            f"- Reported inverter consumption: `{reported_inverter_consumption.kwh:.3f} kWh`",
             f"- Estimated self-consumption: `{self_consumption.self_consumed_kwh:.3f} kWh`",
             f"- Estimated self-consumption percentage: `{self_consumption.self_consumption_percent:.2f}%`",
             "",
@@ -318,7 +324,7 @@ def reliability_statement(daily_validation: pd.DataFrame, validation: pd.DataFra
         "pv_yield_kwh": "generation",
         "exported_energy_kwh": "export",
         "imported_energy_kwh": "import",
-        "consumed_energy_kwh": "consumption",
+        "consumed_energy_kwh": "reported inverter consumption",
         "inverter_output_kwh": "inverter output",
     }
     for field, label in field_labels.items():

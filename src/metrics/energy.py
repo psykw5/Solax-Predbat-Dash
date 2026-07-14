@@ -21,7 +21,7 @@ DEFAULT_PARQUET_PATH = Path("data/processed/solax/solax_intervals.parquet")
 GENERATION_COLUMN = "pv_yield_kwh"
 IMPORT_COLUMN = "imported_energy_kwh"
 EXPORT_COLUMN = "exported_energy_kwh"
-CONSUMPTION_COLUMN = "consumed_energy_kwh"
+REPORTED_CONSUMPTION_COLUMN = "consumed_energy_kwh"
 
 REQUIRED_COLUMNS = {
     "interval_start",
@@ -30,7 +30,7 @@ REQUIRED_COLUMNS = {
     GENERATION_COLUMN,
     IMPORT_COLUMN,
     EXPORT_COLUMN,
-    CONSUMPTION_COLUMN,
+    REPORTED_CONSUMPTION_COLUMN,
 }
 
 
@@ -54,8 +54,33 @@ class EnergyMetrics:
     def total_export(self, start: datetime | str, end: datetime | str) -> EnergyTotal:
         return self._total("total_export", EXPORT_COLUMN, start, end)
 
+    def total_household_consumption(
+        self, start: datetime | str, end: datetime | str
+    ) -> EnergyTotal:
+        start_dt, end_dt = normalize_range(start, end)
+        window = self._window(start_dt, end_dt)
+        return EnergyTotal(
+            metric="total_household_consumption",
+            start=start_dt,
+            end=end_dt,
+            kwh=round(derived_consumption_kwh(window), 6),
+            interval_count=len(window),
+            quality_flagged_interval_count=count_quality_flags(window),
+        )
+
     def total_consumption(self, start: datetime | str, end: datetime | str) -> EnergyTotal:
-        return self._total("total_consumption", CONSUMPTION_COLUMN, start, end)
+        """Backward-compatible alias for canonical household consumption."""
+        return self.total_household_consumption(start, end)
+
+    def total_reported_inverter_consumption(
+        self, start: datetime | str, end: datetime | str
+    ) -> EnergyTotal:
+        return self._total(
+            "total_reported_inverter_consumption",
+            REPORTED_CONSUMPTION_COLUMN,
+            start,
+            end,
+        )
 
     def self_consumption(self, start: datetime | str, end: datetime | str) -> SelfConsumptionMetric:
         start_dt, end_dt = normalize_range(start, end)
@@ -159,7 +184,10 @@ class EnergyMetrics:
             "generation_kwh": round(generation, 6),
             "import_kwh": round(safe_sum(window[IMPORT_COLUMN]), 6),
             "export_kwh": round(exported, 6),
-            "consumption_kwh": round(safe_sum(window[CONSUMPTION_COLUMN]), 6),
+            "household_consumption_kwh": round(derived_consumption_kwh(window), 6),
+            "reported_inverter_consumption_kwh": round(
+                safe_sum(window[REPORTED_CONSUMPTION_COLUMN]), 6
+            ),
             "self_consumed_kwh": round(self_consumed, 6),
             "self_consumption_ratio": None if ratio is None else round(ratio, 6),
             "self_consumption_percent": None if ratio is None else round(ratio * 100, 4),
@@ -186,7 +214,12 @@ class EnergyMetrics:
             data = data.copy()
             data["interval_start"] = pd.to_datetime(data["interval_start"])
             data["interval_end"] = pd.to_datetime(data["interval_end"])
-            numeric_columns = [GENERATION_COLUMN, IMPORT_COLUMN, EXPORT_COLUMN, CONSUMPTION_COLUMN]
+            numeric_columns = [
+                GENERATION_COLUMN,
+                IMPORT_COLUMN,
+                EXPORT_COLUMN,
+                REPORTED_CONSUMPTION_COLUMN,
+            ]
             for column in numeric_columns:
                 data[column] = pd.to_numeric(data[column], errors="coerce")
             data["quality_flags"] = data["quality_flags"].fillna("").astype(str)
@@ -230,3 +263,11 @@ def count_quality_flags(frame: pd.DataFrame) -> int:
     if frame.empty:
         return 0
     return int(frame["quality_flags"].fillna("").astype(str).str.len().gt(0).sum())
+
+
+def derived_consumption_kwh(frame: pd.DataFrame) -> float:
+    """Canonical household consumption derived from reconciled PV/export/import flows."""
+    generation = safe_sum(frame[GENERATION_COLUMN])
+    exported = safe_sum(frame[EXPORT_COLUMN])
+    imported = safe_sum(frame[IMPORT_COLUMN])
+    return max(generation - exported, 0.0) + imported
