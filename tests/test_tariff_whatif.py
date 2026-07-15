@@ -6,7 +6,12 @@ from datetime import UTC, datetime
 import pandas as pd
 
 from tariffs.models import BatteryAssumptions, TariffScenario
-from tariffs.real_comparison import build_public_summary, validate_public_summary
+from tariffs.real_comparison import (
+    build_public_summary,
+    monthly_replay_rows,
+    representative_12_month_period,
+    validate_public_summary,
+)
 from tariffs.whatif import (
     actual_flow_replay,
     default_scenarios,
@@ -186,7 +191,7 @@ class TariffWhatIfTests(unittest.TestCase):
 
     def test_private_interval_data_never_enters_public_output(self) -> None:
         summary = public_summary_fixture()
-        summary["scenarios"][0]["display_name"] = "contains MPAN"
+        summary["representative_12_month"]["scenarios"][0]["display_name"] = "contains MPAN"
 
         with self.assertRaises(ValueError):
             validate_public_summary(summary)
@@ -214,15 +219,14 @@ class TariffWhatIfTests(unittest.TestCase):
         )
 
         summary = build_public_summary(
-            measured_frame,
-            [flux, alt],
-            [optimised],
-            {"octopus_flux": simulated},
-            datetime(2026, 7, 1, tzinfo=UTC),
-            datetime(2026, 7, 2, tzinfo=UTC),
+            section_fixture(measured_frame, [flux, alt], [optimised], {"octopus_flux": simulated}),
+            section_fixture(measured_frame, [flux, alt], [optimised], {"octopus_flux": simulated}),
         )
 
-        ranks = {row["scenario_id"]: row["rank"] for row in summary["scenarios"]}
+        ranks = {
+            row["scenario_id"]: row["rank"]
+            for row in summary["representative_12_month"]["scenarios"]
+        }
         self.assertEqual(ranks["octopus_flux"], 1)
         self.assertIsNone(ranks["agile_import_agile_outgoing"])
 
@@ -230,15 +234,18 @@ class TariffWhatIfTests(unittest.TestCase):
         summary = public_summary_fixture()
 
         self.assertEqual(
-            summary["scenarios"][0]["comparison_basis"], "current_tariff_repriced_history"
+            summary["representative_12_month"]["scenarios"][0]["comparison_basis"],
+            "current_tariff_repriced_history",
         )
 
     def test_measured_replay_and_optimised_results_are_not_mixed(self) -> None:
         summary = public_summary_fixture()
 
-        self.assertEqual(summary["methodology"], "actual_flow_replay")
+        self.assertEqual(summary["representative_12_month"]["methodology"], "actual_flow_replay")
         self.assertEqual(
-            summary["experimental_optimised_scenarios"][0]["comparison_basis"],
+            summary["representative_12_month"]["experimental_optimised_scenarios"][0][
+                "comparison_basis"
+            ],
             "experimental_optimised_battery_simulation",
         )
 
@@ -262,6 +269,88 @@ class TariffWhatIfTests(unittest.TestCase):
         self.assertEqual(future.eligibility_status, "future_unmodelled")
         self.assertTrue(any("private EV charging" in note for note in future.notes))
 
+    def test_short_case_study_is_not_annualised(self) -> None:
+        summary = public_summary_fixture()
+
+        annualised = summary["case_study"]["scenarios"][0]["annualised_difference_vs_flux_gbp"]
+
+        self.assertIsNone(annualised)
+
+    def test_incomplete_tariff_coverage_is_not_compared_to_flux(self) -> None:
+        measured_frame = measured(2)
+        flux = actual_flow_replay(
+            measured_frame,
+            named_scenario("octopus_flux"),
+            import_rates([20, 20]),
+            export_rates([5, 5]),
+        )
+        partial = actual_flow_replay(
+            measured_frame,
+            named_scenario("standard_import_prime_outgoing", "compatibility_unconfirmed"),
+            import_rates([20]),
+            export_rates([5]),
+            flux.net_electricity_cost_gbp,
+        )
+        summary = build_public_summary(
+            section_fixture(measured_frame, [flux, partial], [], {}),
+            section_fixture(measured_frame, [flux, partial], [], {}),
+        )
+
+        rows = {row["scenario_id"]: row for row in summary["representative_12_month"]["scenarios"]}
+        self.assertLess(rows["standard_import_prime_outgoing"]["coverage_percentage"], 99)
+        self.assertIsNone(rows["standard_import_prime_outgoing"]["difference_vs_flux_gbp"])
+
+    def test_representative_period_uses_latest_complete_12_months(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "settlement_start_utc": pd.to_datetime(
+                    ["2025-07-01T00:00:00Z", "2026-07-12T16:30:00Z"], utc=True
+                )
+            }
+        )
+
+        start, end = representative_12_month_period(frame)
+
+        self.assertEqual(start, datetime(2025, 7, 1, tzinfo=UTC))
+        self.assertEqual(end, datetime(2026, 7, 1, tzinfo=UTC))
+
+    def test_monthly_rows_show_seasonal_differences(self) -> None:
+        frame = measured(4)
+        frame["settlement_start_utc"] = pd.to_datetime(
+            [
+                "2026-01-31T23:00:00Z",
+                "2026-01-31T23:30:00Z",
+                "2026-02-01T00:00:00Z",
+                "2026-02-01T00:30:00Z",
+            ],
+            utc=True,
+        )
+        frame["settlement_end_utc"] = frame["settlement_start_utc"] + pd.Timedelta(minutes=30)
+        inputs = {
+            "octopus_flux": (
+                named_scenario("octopus_flux"),
+                import_rates([20] * 4),
+                export_rates([5] * 4),
+            ),
+            "agile_import_agile_outgoing": (
+                named_scenario("agile_import_agile_outgoing", "compatibility_unconfirmed"),
+                import_rates([10] * 4),
+                export_rates([5] * 4),
+            ),
+        }
+
+        rows = monthly_replay_rows(
+            frame,
+            inputs,
+            datetime(2026, 1, 31, 23, tzinfo=UTC),
+            datetime(2026, 2, 1, 1, tzinfo=UTC),
+        )
+
+        self.assertEqual({row["month"] for row in rows}, {"2026-01", "2026-02"})
+        self.assertTrue(
+            all(row["comparison_basis"] == "current_tariff_repriced_history" for row in rows)
+        )
+
 
 def scenario(
     standing_charge_p_per_day: float = 0, eligibility_status: str = "eligible"
@@ -282,44 +371,49 @@ def named_scenario(name: str, eligibility_status: str = "eligible") -> TariffSce
 
 
 def public_summary_fixture() -> dict[str, object]:
+    measured_frame = measured()
+    flux = actual_flow_replay(
+        measured_frame,
+        named_scenario("octopus_flux"),
+        import_rates([20, 20]),
+        export_rates([5, 5]),
+    )
+    simulated, optimised = optimise_battery_dispatch(
+        measured_frame,
+        named_scenario("octopus_flux"),
+        import_rates([20, 20]),
+        export_rates([5, 5]),
+    )
+    case_study = section_fixture(measured_frame, [flux], [optimised], {"octopus_flux": simulated})
+    representative = section_fixture(
+        measured_frame,
+        [
+            flux.model_copy(update={"annualised_difference_vs_flux_gbp": 0}),
+        ],
+        [optimised],
+        {"octopus_flux": simulated},
+        period_start=datetime(2025, 7, 1, tzinfo=UTC),
+        period_end=datetime(2026, 7, 1, tzinfo=UTC),
+    )
+    return build_public_summary(case_study, representative)
+
+
+def section_fixture(
+    measured_frame: pd.DataFrame,
+    replay_results: list,
+    optimised_results: list,
+    simulated_frames: dict[str, pd.DataFrame],
+    period_start: datetime = datetime(2026, 7, 1, tzinfo=UTC),
+    period_end: datetime = datetime(2026, 7, 2, tzinfo=UTC),
+) -> dict[str, object]:
     return {
-        "reporting_period": {
-            "start_month": "2026-06",
-            "end_month": "2026-07",
-            "half_hour_count": 100,
-        },
-        "baseline_scenario": "octopus_flux",
-        "methodology": "actual_flow_replay",
-        "scenarios": [
-            {
-                "scenario_id": "octopus_flux",
-                "display_name": "Octopus Flux",
-                "eligibility_status": "eligible",
-                "comparison_basis": "current_tariff_repriced_history",
-                "coverage_percentage": 100,
-                "net_cost_gbp": 10,
-                "difference_vs_flux_gbp": 0,
-                "annualised_difference_vs_flux_gbp": 0,
-                "rank": 1,
-                "data_quality_status": "complete",
-            }
-        ],
-        "experimental_optimised_scenarios": [
-            {
-                "scenario_id": "octopus_flux",
-                "display_name": "Octopus Flux",
-                "eligibility_status": "eligible",
-                "comparison_basis": "experimental_optimised_battery_simulation",
-                "coverage_percentage": 100,
-                "net_cost_gbp": 8,
-                "difference_vs_flux_gbp": 0,
-                "battery_throughput_kwh": 3,
-                "equivalent_full_battery_cycles": 0.5,
-                "grid_charge_half_hours": 1,
-                "battery_export_half_hours": 0,
-                "data_quality_status": "complete",
-            }
-        ],
+        "period_start": period_start,
+        "period_end": period_end,
+        "measured": measured_frame,
+        "replay_results": replay_results,
+        "optimised_results": optimised_results,
+        "simulated_frames": simulated_frames,
+        "monthly_rows": [],
     }
 
 

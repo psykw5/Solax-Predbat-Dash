@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -72,23 +72,280 @@ def run_real_tariff_comparison(
     for product, payload in product_payloads.items():
         write_json(raw_dir / "products" / f"{product}.json", redact_product_payload(payload))
 
-    period_start = max(
+    case_study_start = max(
         parse_datetime(product_payloads[product]["available_from"])
         for products in SCENARIO_PRODUCTS.values()
         for product in products
     )
-    period_end = data_end
+    representative_start, representative_end = representative_12_month_period(measured_all)
+    case_study_end = data_end + timedelta(minutes=30)
+    retrieval = datetime.now(UTC)
+    battery = BatteryAssumptions()
+    case_study = run_period_comparison(
+        octopus,
+        region,
+        measured_all,
+        case_study_start,
+        case_study_end,
+        raw_dir,
+        battery,
+        retrieval,
+    )
+    representative = run_period_comparison(
+        octopus,
+        region,
+        measured_all,
+        representative_start,
+        representative_end,
+        raw_dir,
+        battery,
+        retrieval,
+    )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    summary_rows = []
+    for section_name, section in {
+        "case_study": case_study,
+        "representative_12_month": representative,
+    }.items():
+        for result in section["replay_results"] + section["optimised_results"]:
+            row = result.model_dump()
+            row["section"] = section_name
+            summary_rows.append(row)
+        for name, frame in section["simulated_frames"].items():
+            frame.to_parquet(
+                output_dir / f"{section_name}_{name}_real_optimised_half_hourly.parquet",
+                index=False,
+            )
+    pd.DataFrame(summary_rows).to_csv(output_dir / "real_scenario_summary.csv", index=False)
+    pd.DataFrame(representative["monthly_rows"]).to_csv(
+        output_dir / "representative_monthly_scenario_summary.csv", index=False
+    )
+
+    public_summary = build_public_summary(
+        case_study,
+        representative,
+    )
+    public_path.parent.mkdir(parents=True, exist_ok=True)
+    public_path.write_text(json.dumps(public_summary, indent=2, sort_keys=True), encoding="utf-8")
+    write_json(
+        output_dir / "real_comparison_audit.json",
+        {
+            "comparison_basis": "current_tariff_repriced_history",
+            "retrieval_date": retrieval.isoformat(),
+            "region_code": region,
+            "rate_coverage": {
+                "case_study": case_study["rate_coverage"],
+                "representative_12_month": representative["rate_coverage"],
+            },
+            "public_summary": public_summary,
+        },
+    )
+    return {
+        "public_summary": public_summary,
+        "case_study": case_study,
+        "representative_12_month": representative,
+    }
+
+
+def build_public_summary(
+    case_study: dict[str, Any],
+    representative: dict[str, Any],
+) -> dict[str, Any]:
+    summary = {
+        "baseline_scenario": "octopus_flux",
+        "primary_comparison": "representative_12_month",
+        "case_study": section_summary(case_study, allow_annualised=False),
+        "representative_12_month": section_summary(representative, allow_annualised=True),
+        "notes": [
+            "Measured-flow replay prices the observed household flows without changing battery behaviour.",
+            "Experimental optimisation is separate and does not represent actual inverter control.",
+            "Compatibility-unconfirmed scenarios are shown for context but are not ranked.",
+        ],
+    }
+    validate_public_summary(summary)
+    return summary
+
+
+def section_summary(section: dict[str, Any], allow_annualised: bool) -> dict[str, Any]:
+    measured = section["measured"]
+    replay_results = section["replay_results"]
+    optimised_results = section["optimised_results"]
+    simulated_frames = section["simulated_frames"]
+    period_start = section["period_start"]
+    period_end = section["period_end"]
+    duration_days = max((period_end - period_start).days, 1)
+    scenario_rows = []
+    comparable = [
+        result
+        for result in replay_results
+        if result.tariff_coverage_percentage >= 99 and result.eligibility_status == "eligible"
+    ]
+    ranks = {
+        result.scenario: rank + 1
+        for rank, result in enumerate(
+            sorted(comparable, key=lambda item: item.net_electricity_cost_gbp)
+        )
+    }
+    for result in replay_results:
+        scenario_rows.append(
+            {
+                "scenario_id": result.scenario,
+                "display_name": DISPLAY_NAMES[result.scenario],
+                "eligibility_status": result.eligibility_status,
+                "comparison_basis": "current_tariff_repriced_history",
+                "coverage_percentage": result.tariff_coverage_percentage,
+                "net_cost_gbp": result.net_electricity_cost_gbp,
+                "difference_vs_flux_gbp": result.difference_vs_flux_gbp
+                if result.tariff_coverage_percentage >= 99
+                else None,
+                "annualised_difference_vs_flux_gbp": result.annualised_difference_vs_flux_gbp
+                if allow_annualised
+                and duration_days >= 90
+                and result.tariff_coverage_percentage >= 99
+                else None,
+                "rank": ranks.get(result.scenario),
+                "data_quality_status": result.data_quality_status,
+            }
+        )
+    experimental = []
+    for result in optimised_results:
+        frame = simulated_frames.get(result.scenario, pd.DataFrame())
+        experimental.append(
+            {
+                "scenario_id": result.scenario,
+                "display_name": DISPLAY_NAMES[result.scenario],
+                "eligibility_status": result.eligibility_status,
+                "comparison_basis": "experimental_optimised_battery_simulation",
+                "coverage_percentage": result.tariff_coverage_percentage,
+                "net_cost_gbp": result.net_electricity_cost_gbp,
+                "difference_vs_flux_gbp": result.difference_vs_flux_gbp
+                if result.tariff_coverage_percentage >= 99
+                else None,
+                "battery_throughput_kwh": result.battery_throughput_kwh,
+                "equivalent_full_battery_cycles": result.equivalent_full_battery_cycles,
+                "grid_charge_half_hours": int(
+                    (frame.get("grid_charge_kwh", pd.Series(dtype=float)) > 0).sum()
+                ),
+                "battery_export_half_hours": 0,
+                "data_quality_status": result.data_quality_status,
+            }
+        )
+    return {
+        "reporting_period": {
+            "start_month": period_start.strftime("%Y-%m"),
+            "end_month": month_label_for_exclusive_end(period_end),
+            "half_hour_count": int(len(measured)),
+            "expected_half_hours": expected_half_hours(period_start, period_end),
+            "energy_coverage_percentage": energy_coverage_percent(
+                measured, period_start, period_end
+            ),
+            "comparison_basis": "current_tariff_repriced_history",
+        },
+        "methodology": "actual_flow_replay",
+        "scenarios": scenario_rows,
+        "monthly_scenarios": section["monthly_rows"],
+        "experimental_optimised_scenarios": experimental,
+    }
+
+
+def validate_public_summary(summary: dict[str, Any]) -> None:
+    allowed_top = {
+        "baseline_scenario",
+        "primary_comparison",
+        "case_study",
+        "representative_12_month",
+        "notes",
+    }
+    if set(summary) != allowed_top:
+        raise ValueError("Public tariff summary has unexpected top-level fields.")
+    allowed_scenario = {
+        "scenario_id",
+        "display_name",
+        "eligibility_status",
+        "comparison_basis",
+        "coverage_percentage",
+        "net_cost_gbp",
+        "difference_vs_flux_gbp",
+        "annualised_difference_vs_flux_gbp",
+        "rank",
+        "data_quality_status",
+    }
+    allowed_section = {
+        "reporting_period",
+        "methodology",
+        "scenarios",
+        "monthly_scenarios",
+        "experimental_optimised_scenarios",
+    }
+    allowed_period = {
+        "start_month",
+        "end_month",
+        "half_hour_count",
+        "expected_half_hours",
+        "energy_coverage_percentage",
+        "comparison_basis",
+    }
+    allowed_month = {
+        "month",
+        "scenario_id",
+        "display_name",
+        "eligibility_status",
+        "comparison_basis",
+        "coverage_percentage",
+        "energy_coverage_percentage",
+        "net_cost_gbp",
+        "difference_vs_flux_gbp",
+        "data_quality_status",
+    }
+    for section_name in ["case_study", "representative_12_month"]:
+        section = summary[section_name]
+        if set(section) != allowed_section:
+            raise ValueError("Public tariff section has unexpected fields.")
+        if set(section["reporting_period"]) != allowed_period:
+            raise ValueError("Public tariff period has unexpected fields.")
+        for row in section["scenarios"]:
+            if set(row) != allowed_scenario:
+                raise ValueError("Public tariff scenario row has unexpected fields.")
+        for row in section["monthly_scenarios"]:
+            if set(row) != allowed_month:
+                raise ValueError("Public tariff monthly row has unexpected fields.")
+    forbidden = json.dumps(summary).lower()
+    for token in [
+        "mpan",
+        "serial",
+        "account",
+        "meter",
+        "filename",
+        "endpoint",
+        "latitude",
+        "longitude",
+        "zappi",
+        "leaf",
+    ]:
+        if token in forbidden:
+            raise ValueError(f"Public tariff summary contains private token: {token}")
+
+
+def run_period_comparison(
+    octopus: PublicOctopusClient,
+    region: str,
+    measured_all: pd.DataFrame,
+    period_start: datetime,
+    period_end: datetime,
+    raw_dir: Path,
+    battery: BatteryAssumptions,
+    retrieval: datetime,
+) -> dict[str, Any]:
     measured = measured_all[
         (measured_all["settlement_start_utc"] >= period_start)
-        & (measured_all["settlement_end_utc"] <= period_end)
+        & (measured_all["settlement_end_utc"] < period_end)
     ].copy()
     if measured.empty:
         raise ValueError(
-            "No measured half-hourly energy data overlaps the comparable tariff period."
+            "No measured half-hourly energy data overlaps the tariff comparison period."
         )
 
-    retrieval = datetime.now(UTC)
-    battery = BatteryAssumptions()
     scenario_inputs: dict[str, tuple[TariffScenario, pd.DataFrame, pd.DataFrame]] = {}
     rate_coverage: dict[str, dict[str, object]] = {}
     for scenario in default_scenarios(retrieval):
@@ -145,152 +402,95 @@ def run_real_tariff_comparison(
         optimised_results.append(optimised)
         simulated_frames[name] = simulated
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([result.model_dump() for result in replay_results + optimised_results]).to_csv(
-        output_dir / "real_scenario_summary.csv", index=False
-    )
-    for name, frame in simulated_frames.items():
-        frame.to_parquet(output_dir / f"{name}_real_optimised_half_hourly.parquet", index=False)
-
-    public_summary = build_public_summary(
-        measured,
-        replay_results,
-        optimised_results,
-        simulated_frames,
-        period_start,
-        period_end,
-    )
-    public_path.parent.mkdir(parents=True, exist_ok=True)
-    public_path.write_text(json.dumps(public_summary, indent=2, sort_keys=True), encoding="utf-8")
-    write_json(
-        output_dir / "real_comparison_audit.json",
-        {
-            "comparison_basis": "current_tariff_repriced_history",
-            "retrieval_date": retrieval.isoformat(),
-            "region_code": region,
-            "rate_coverage": rate_coverage,
-            "public_summary": public_summary,
-        },
-    )
     return {
-        "public_summary": public_summary,
+        "period_start": period_start,
+        "period_end": period_end,
+        "measured": measured,
+        "scenario_inputs": scenario_inputs,
+        "rate_coverage": rate_coverage,
         "replay_results": replay_results,
         "optimised_results": optimised_results,
-        "rate_coverage": rate_coverage,
+        "simulated_frames": simulated_frames,
+        "monthly_rows": monthly_replay_rows(measured, scenario_inputs, period_start, period_end),
     }
 
 
-def build_public_summary(
+def monthly_replay_rows(
     measured: pd.DataFrame,
-    replay_results: list[ScenarioResult],
-    optimised_results: list[ScenarioResult],
-    simulated_frames: dict[str, pd.DataFrame],
+    scenario_inputs: dict[str, tuple[TariffScenario, pd.DataFrame, pd.DataFrame]],
     period_start: datetime,
     period_end: datetime,
-) -> dict[str, Any]:
-    scenario_rows = []
-    comparable = [
-        result
-        for result in replay_results
-        if result.tariff_coverage_percentage >= 99 and result.eligibility_status == "eligible"
-    ]
-    ranks = {
-        result.scenario: rank + 1
-        for rank, result in enumerate(
-            sorted(comparable, key=lambda item: item.net_electricity_cost_gbp)
-        )
-    }
-    for result in replay_results:
-        scenario_rows.append(
-            {
-                "scenario_id": result.scenario,
-                "display_name": DISPLAY_NAMES[result.scenario],
-                "eligibility_status": result.eligibility_status,
-                "comparison_basis": "current_tariff_repriced_history",
-                "coverage_percentage": result.tariff_coverage_percentage,
-                "net_cost_gbp": result.net_electricity_cost_gbp,
-                "difference_vs_flux_gbp": result.difference_vs_flux_gbp,
-                "annualised_difference_vs_flux_gbp": result.annualised_difference_vs_flux_gbp,
-                "rank": ranks.get(result.scenario),
-                "data_quality_status": result.data_quality_status,
-            }
-        )
-    experimental = []
-    for result in optimised_results:
-        frame = simulated_frames.get(result.scenario, pd.DataFrame())
-        experimental.append(
-            {
-                "scenario_id": result.scenario,
-                "display_name": DISPLAY_NAMES[result.scenario],
-                "eligibility_status": result.eligibility_status,
-                "comparison_basis": "experimental_optimised_battery_simulation",
-                "coverage_percentage": result.tariff_coverage_percentage,
-                "net_cost_gbp": result.net_electricity_cost_gbp,
-                "difference_vs_flux_gbp": result.difference_vs_flux_gbp,
-                "battery_throughput_kwh": result.battery_throughput_kwh,
-                "equivalent_full_battery_cycles": result.equivalent_full_battery_cycles,
-                "grid_charge_half_hours": int(
-                    (frame.get("grid_charge_kwh", pd.Series(dtype=float)) > 0).sum()
-                ),
-                "battery_export_half_hours": 0,
-                "data_quality_status": result.data_quality_status,
-            }
-        )
-    summary = {
-        "reporting_period": {
-            "start_month": period_start.strftime("%Y-%m"),
-            "end_month": period_end.strftime("%Y-%m"),
-            "half_hour_count": int(len(measured)),
-        },
-        "baseline_scenario": "octopus_flux",
-        "methodology": "actual_flow_replay",
-        "scenarios": scenario_rows,
-        "experimental_optimised_scenarios": experimental,
-    }
-    validate_public_summary(summary)
-    return summary
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    month_start = pd.Timestamp(period_start)
+    while month_start < pd.Timestamp(period_end):
+        natural_month_end = pd.Timestamp(
+            year=month_start.year, month=month_start.month, day=1, tz=UTC
+        ) + pd.DateOffset(months=1)
+        month_end = min(natural_month_end, pd.Timestamp(period_end))
+        month_start_dt = month_start.to_pydatetime()
+        month_end_dt = month_end.to_pydatetime()
+        month_measured = measured[
+            (measured["settlement_start_utc"] >= month_start_dt)
+            & (measured["settlement_end_utc"] <= month_end_dt)
+        ].copy()
+        if not month_measured.empty:
+            flux = actual_flow_replay(month_measured, *scenario_inputs["octopus_flux"])
+            month_energy_coverage = energy_coverage_percent(
+                month_measured, month_start_dt, month_end_dt
+            )
+            for scenario_id, (scenario, import_rates, export_rates) in scenario_inputs.items():
+                result = actual_flow_replay(
+                    month_measured,
+                    scenario,
+                    import_rates,
+                    export_rates,
+                    flux.net_electricity_cost_gbp,
+                )
+                rows.append(
+                    {
+                        "month": month_start.strftime("%Y-%m"),
+                        "scenario_id": scenario_id,
+                        "display_name": DISPLAY_NAMES[scenario_id],
+                        "eligibility_status": result.eligibility_status,
+                        "comparison_basis": "current_tariff_repriced_history",
+                        "coverage_percentage": result.tariff_coverage_percentage,
+                        "energy_coverage_percentage": month_energy_coverage,
+                        "net_cost_gbp": result.net_electricity_cost_gbp,
+                        "difference_vs_flux_gbp": result.difference_vs_flux_gbp
+                        if result.tariff_coverage_percentage >= 99
+                        else None,
+                        "data_quality_status": result.data_quality_status,
+                    }
+                )
+        month_start = month_end
+    return rows
 
 
-def validate_public_summary(summary: dict[str, Any]) -> None:
-    allowed_top = {
-        "reporting_period",
-        "baseline_scenario",
-        "methodology",
-        "scenarios",
-        "experimental_optimised_scenarios",
-    }
-    if set(summary) != allowed_top:
-        raise ValueError("Public tariff summary has unexpected top-level fields.")
-    allowed_scenario = {
-        "scenario_id",
-        "display_name",
-        "eligibility_status",
-        "comparison_basis",
-        "coverage_percentage",
-        "net_cost_gbp",
-        "difference_vs_flux_gbp",
-        "annualised_difference_vs_flux_gbp",
-        "rank",
-        "data_quality_status",
-    }
-    for row in summary["scenarios"]:
-        if set(row) != allowed_scenario:
-            raise ValueError("Public tariff scenario row has unexpected fields.")
-    forbidden = json.dumps(summary).lower()
-    for token in [
-        "mpan",
-        "serial",
-        "account",
-        "meter",
-        "filename",
-        "endpoint",
-        "latitude",
-        "longitude",
-        "zappi",
-        "leaf",
-    ]:
-        if token in forbidden:
-            raise ValueError(f"Public tariff summary contains private token: {token}")
+def representative_12_month_period(measured: pd.DataFrame) -> tuple[datetime, datetime]:
+    latest_start = pd.to_datetime(measured["settlement_start_utc"], utc=True).max()
+    latest_complete_month_start = pd.Timestamp(
+        year=latest_start.year, month=latest_start.month, day=1, tz=UTC
+    )
+    period_end = latest_complete_month_start
+    period_start = (period_end - pd.DateOffset(months=12)).to_pydatetime()
+    return period_start, period_end.to_pydatetime()
+
+
+def expected_half_hours(period_start: datetime, period_end: datetime) -> int:
+    duration = pd.Timestamp(period_end) - pd.Timestamp(period_start)
+    return int(duration / pd.Timedelta(minutes=30))
+
+
+def energy_coverage_percent(
+    measured: pd.DataFrame, period_start: datetime, period_end: datetime
+) -> float:
+    expected = expected_half_hours(period_start, period_end)
+    return round(len(measured) / expected * 100, 4) if expected else 0.0
+
+
+def month_label_for_exclusive_end(period_end: datetime) -> str:
+    return (pd.Timestamp(period_end) - pd.Timedelta(minutes=30)).strftime("%Y-%m")
 
 
 def fetch_rates(

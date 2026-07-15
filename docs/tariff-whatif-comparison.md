@@ -45,7 +45,7 @@ with measured replay results.
 
 `actual_flow_replay` prices measured half-hourly grid import and export without altering battery behaviour.
 
-`optimised_battery_simulation` simulates a configurable 6 kWh battery with minimum/maximum SoC, charge/discharge power limits, efficiency and explicit controls for grid charging and battery export. Simulated flows are stored separately from measured flows.
+`optimised_battery_simulation` simulates the configured battery capacity and SoC range from `config/wattson.yaml`, with explicit simulation controls for charge/discharge power, efficiency, grid charging and battery export. Simulated flows are stored separately from measured flows.
 
 The optimisation is experimental. It can show directional opportunity, but it is not evidence that
 the real inverter would have behaved that way and it must not imply any inverter control has been
@@ -60,6 +60,22 @@ The complete tariff comparison includes standing charges. Gas, finance, maintena
 ## Fair Comparison
 
 Scenarios must use the same energy coverage, missing-data exclusions, VAT convention, battery constraints and start/end period. Scenarios with incomplete tariff coverage are reported separately and not ranked unfairly.
+
+The public summary includes two comparison windows:
+
+- `case_study`: the latest short period where all configured products have current API rate
+  coverage. This keeps the original 900-half-hour result, but annualised figures are suppressed
+  because the period is shorter than 90 days.
+- `representative_12_month`: the most recent complete 12 calendar months of measured energy data,
+  repriced using the selected tariff products where official rates cover the same period. This is
+  the primary public comparison because it includes summer and winter behaviour.
+
+If a tariff product does not have sufficient rate coverage for the 12-month window, Wattson keeps
+the row for transparency but sets difference-versus-Flux and annualised difference to `null`.
+Compatibility-unconfirmed scenarios remain unranked even when rate coverage is complete.
+
+Monthly rows are published for the representative window so seasonal effects are visible. A tariff
+that looks attractive in summer can still be worse in winter, and vice versa.
 
 ## Private Outputs
 
@@ -77,9 +93,11 @@ The optional generated public artifact is `data/public/wattson-tariff-comparison
 Git-ignored and contains only aggregate scenario rows:
 
 - reporting months and half-hour count;
+- energy and tariff coverage percentages;
 - scenario display name and eligibility status;
 - comparison basis;
 - aggregate net cost and difference versus Flux;
+- monthly aggregate net cost and difference versus Flux;
 - aggregate coverage and data-quality status;
 - separate experimental optimisation aggregates.
 
