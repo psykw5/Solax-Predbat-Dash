@@ -10,8 +10,9 @@ from unittest.mock import patch
 import pandas as pd
 
 from live.publish import (
-    MONTHLY_DESTINATION_RELATIVE_PATH,
+    WEBSITE_SUMMARY_RELATIVE_PATH,
     build_monthly_public_snapshot,
+    load_monthly_public_snapshot,
     publish_monthly_summary,
     publish_public_snapshot,
     publish_website_snapshot,
@@ -38,6 +39,17 @@ class PublicationPipelineTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             validate_monthly_public_snapshot(snapshot)
+
+    def test_monthly_loader_accepts_local_and_stable_website_filenames(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "wattson-monthly-summary.json"
+            website = root / "wattson-summary.json"
+            write_json(local, monthly_snapshot())
+            write_json(website, monthly_snapshot())
+
+            self.assertEqual(load_monthly_public_snapshot(local)["reporting_month"], "2026-05")
+            self.assertEqual(load_monthly_public_snapshot(website)["reporting_month"], "2026-05")
 
     def test_previous_month_must_be_complete(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -141,11 +153,38 @@ class PublicationPipelineTests(unittest.TestCase):
             source = root / "wattson-monthly-summary.json"
             website = initialise_website_repo(root / "site")
             write_json(source, monthly_snapshot())
-            write_json(website / MONTHLY_DESTINATION_RELATIVE_PATH, monthly_snapshot())
+            write_json(website / WEBSITE_SUMMARY_RELATIVE_PATH, monthly_snapshot())
 
             result = publish_monthly_summary(source, website)
 
             self.assertEqual(result.status, "unchanged")
+            self.assertEqual(result.material_changed_fields, [])
+
+    def test_monthly_publication_replaces_older_same_month_stable_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "wattson-monthly-summary.json"
+            website = initialise_website_repo(root / "site")
+            incoming = monthly_snapshot(reporting_month="2026-06")
+            existing = dict(incoming)
+            existing["lifetime_export_income_gbp"] = 12.34
+            write_json(source, incoming)
+            write_json(website / WEBSITE_SUMMARY_RELATIVE_PATH, existing)
+            git(website, "add", WEBSITE_SUMMARY_RELATIVE_PATH.as_posix())
+            git(website, "commit", "-m", "old summary")
+
+            with (
+                patch("live.publish.run_website_checks"),
+                patch("live.publish.commit_and_push_website", return_value="commit_hash"),
+            ):
+                result = publish_monthly_summary(source, website)
+
+            self.assertEqual(result.status, "published")
+            self.assertIn("lifetime_export_income_gbp", result.material_changed_fields or [])
+            self.assertNotIn(
+                "lifetime_export_income_gbp",
+                json.loads((website / WEBSITE_SUMMARY_RELATIVE_PATH).read_text(encoding="utf-8")),
+            )
 
     def test_monthly_website_diff_stages_only_monthly_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -161,8 +200,12 @@ class PublicationPipelineTests(unittest.TestCase):
                 result = publish_monthly_summary(source, website)
 
             self.assertEqual(result.status, "published")
+            self.assertIn("reporting_month", result.material_changed_fields or [])
             changed = git_output(website, "diff", "--name-only", "HEAD")
-            self.assertEqual(changed, MONTHLY_DESTINATION_RELATIVE_PATH.as_posix())
+            self.assertEqual(
+                WEBSITE_SUMMARY_RELATIVE_PATH.as_posix(), "src/data/wattson-summary.json"
+            )
+            self.assertEqual(changed, WEBSITE_SUMMARY_RELATIVE_PATH.as_posix())
 
     def test_private_live_snapshot_validates_locally_without_website_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -287,7 +330,7 @@ class PublicationPipelineTests(unittest.TestCase):
             website = initialise_website_repo(root / "site")
             existing = monthly_snapshot(reporting_month="2026-05")
             write_json(source, monthly_snapshot(reporting_month="2026-06"))
-            write_json(website / MONTHLY_DESTINATION_RELATIVE_PATH, existing)
+            write_json(website / WEBSITE_SUMMARY_RELATIVE_PATH, existing)
 
             with (
                 patch("live.publish.run_website_checks", side_effect=ValueError("check failed")),
@@ -296,9 +339,7 @@ class PublicationPipelineTests(unittest.TestCase):
                 publish_monthly_summary(source, website)
 
             self.assertEqual(
-                json.loads(
-                    (website / MONTHLY_DESTINATION_RELATIVE_PATH).read_text(encoding="utf-8")
-                ),
+                json.loads((website / WEBSITE_SUMMARY_RELATIVE_PATH).read_text(encoding="utf-8")),
                 existing,
             )
 
@@ -341,7 +382,7 @@ class PublicationPipelineTests(unittest.TestCase):
                 publish_monthly_summary(source, website)
 
             published = (
-                (website / MONTHLY_DESTINATION_RELATIVE_PATH).read_text(encoding="utf-8").lower()
+                (website / WEBSITE_SUMMARY_RELATIVE_PATH).read_text(encoding="utf-8").lower()
             )
             for private in ["account", "mpan", "serial", "wifi", "token", "api_key"]:
                 self.assertNotIn(private, published)
@@ -492,9 +533,7 @@ def initialise_website_repo(path: Path) -> Path:
     (path / "src" / "data").mkdir(parents=True, exist_ok=True)
     (path / "astro.config.mjs").write_text("export default {};\n", encoding="utf-8")
     (path / "package.json").write_text('{"scripts":{}}\n', encoding="utf-8")
-    write_json(
-        path / MONTHLY_DESTINATION_RELATIVE_PATH, monthly_snapshot(reporting_month="2026-05")
-    )
+    write_json(path / WEBSITE_SUMMARY_RELATIVE_PATH, monthly_snapshot(reporting_month="2026-05"))
     git(path, "init", "-b", "main")
     git(path, "config", "user.email", "test.invalid")
     git(path, "config", "user.name", "Test User")

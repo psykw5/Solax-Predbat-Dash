@@ -6,7 +6,10 @@ import os
 import subprocess
 from pathlib import Path
 
+from config.loader import load_wattson_config
 from utils.env import read_dotenv
+
+_WATTSON = load_wattson_config()
 
 DEFAULT_LIVE_DIR = Path("data/live")
 DEFAULT_RAW_LIVE_DIR = Path("data/raw/live")
@@ -14,6 +17,9 @@ DEFAULT_PUBLIC_DIR = Path("data/public")
 DEFAULT_DB_PATH = DEFAULT_LIVE_DIR / "wattson-live.sqlite"
 DEFAULT_PUBLIC_SNAPSHOT_PATH = DEFAULT_PUBLIC_DIR / "wattson-live-summary.json"
 DEFAULT_PUBLIC_DATA_DELAY_MINUTES = 30
+DEFAULT_SOLAX_COLLECTION_INTERVAL_MINUTES = _WATTSON.collection.solax_interval_minutes
+DEFAULT_OCTOPUS_REFRESH_INTERVAL_HOURS = _WATTSON.collection.octopus_refresh_interval_hours
+PUBLIC_UPDATE_FREQUENCY = _WATTSON.collection.public_update_frequency
 
 SOLAX_KEYS = ["SOLAX_TOKEN_ID", "SOLAX_WIFI_SN"]
 OCTOPUS_KEYS = ["OCTOPUS_API_KEY", "OCTOPUS_ACCOUNT_NUMBER"]
@@ -51,6 +57,10 @@ def assert_private_outputs_ignored() -> None:
         "data/raw/octopus/example.json",
         "data/processed/octopus/example.parquet",
         "data/processed/financial/example.parquet",
+        "data/raw/weather/open_meteo/example.json",
+        "data/raw/weather/pvgis/example.json",
+        "data/processed/weather/example.parquet",
+        "data/live/wattson-weather.sqlite",
         "data/live/wattson-live.sqlite",
         "data/live/wattson-live.sqlite-wal",
         "data/public/wattson-live-summary.json",

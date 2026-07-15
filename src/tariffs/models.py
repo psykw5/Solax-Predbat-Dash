@@ -6,14 +6,21 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from config.loader import load_wattson_config
+
+_WATTSON = load_wattson_config()
+
 
 class BatteryAssumptions(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    usable_capacity_kwh: float = Field(default=6.0, gt=0)
-    initial_soc_kwh: float = Field(default=3.0, ge=0)
-    minimum_soc_kwh: float = Field(default=0.6, ge=0)
-    maximum_soc_kwh: float = Field(default=6.0, gt=0)
+    usable_capacity_kwh: float = Field(default=_WATTSON.battery.usable_capacity_kwh, gt=0)
+    initial_soc_kwh: float = Field(default=_WATTSON.battery.usable_capacity_kwh / 2, ge=0)
+    minimum_soc_kwh: float = Field(
+        default=_WATTSON.battery.usable_capacity_kwh * _WATTSON.battery.minimum_soc_percent / 100,
+        ge=0,
+    )
+    maximum_soc_kwh: float = Field(default=_WATTSON.battery.usable_capacity_kwh, gt=0)
     charge_power_kw: float = Field(default=3.0, gt=0)
     discharge_power_kw: float = Field(default=3.0, gt=0)
     charge_efficiency: float = Field(default=0.95, gt=0, le=1)

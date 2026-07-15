@@ -13,14 +13,18 @@ from difflib import unified_diff
 from pathlib import Path
 from typing import Any
 
+from config.loader import load_wattson_config
 from live.config import DEFAULT_LIVE_DIR, DEFAULT_PUBLIC_SNAPSHOT_PATH, load_environment
 from live.store import LiveStore
 from metrics import EnergyMetrics
 from utils.redaction import text_hash
 
 DEFAULT_WEBSITE_REPO_PATH = Path("..") / "kevinwatson.dev"
-MONTHLY_DESTINATION_RELATIVE_PATH = Path("src/data/wattson-monthly-summary.json")
+_WATTSON = load_wattson_config()
+WEBSITE_SUMMARY_RELATIVE_PATH = Path("src/data") / _WATTSON.publication.public_summary_filename
+MONTHLY_DESTINATION_RELATIVE_PATH = WEBSITE_SUMMARY_RELATIVE_PATH
 MONTHLY_PUBLIC_SNAPSHOT_PATH = Path("data/public/wattson-monthly-summary.json")
+MONTHLY_PUBLIC_FILENAMES = {"wattson-monthly-summary.json", "wattson-summary.json"}
 FINANCIAL_DIR = Path("data/processed/financial")
 ENERGY_INTERVALS_PATH = Path("data/processed/solax/solax_intervals.parquet")
 MAX_FRESHNESS_MINUTES = 24 * 60
@@ -184,13 +188,13 @@ def publish_monthly_summary_locked(
     validate_website_repository(target_repo)
     destination = target_repo / MONTHLY_DESTINATION_RELATIVE_PATH
     source = load_monthly_public_snapshot(source_path)
-    existing = load_monthly_public_snapshot(destination) if destination.exists() else None
-    if existing and existing["reporting_month"] == source["reporting_month"]:
+    existing = load_existing_monthly_public_snapshot(destination) if destination.exists() else None
+    if existing and material_fingerprint(existing) == material_fingerprint(source):
         return PublicationResult(
             status="unchanged",
             source_path=source_path,
             destination_path=destination,
-            message="Reporting month has already been published.",
+            message="Monthly public summary has no material changes.",
             source_snapshot_hash=snapshot_hash(source),
             material_changed_fields=[],
         )
@@ -298,10 +302,30 @@ def load_public_snapshot(path: Path) -> dict[str, Any]:
 
 
 def load_monthly_public_snapshot(path: Path) -> dict[str, Any]:
-    if path.name != "wattson-monthly-summary.json":
-        raise ValueError("Only wattson-monthly-summary.json may be published monthly.")
+    if path.name not in MONTHLY_PUBLIC_FILENAMES:
+        raise ValueError(
+            "Only wattson-monthly-summary.json or wattson-summary.json may be used "
+            "as monthly public summaries."
+        )
     snapshot = json.loads(path.read_text(encoding="utf-8"))
     validate_monthly_public_snapshot(snapshot)
+    return snapshot
+
+
+def load_existing_monthly_public_snapshot(path: Path) -> dict[str, Any]:
+    if path.name not in MONTHLY_PUBLIC_FILENAMES:
+        raise ValueError(
+            "Only wattson-monthly-summary.json or wattson-summary.json may be used "
+            "as monthly public summaries."
+        )
+    snapshot = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(snapshot, dict):
+        raise ValueError("Existing monthly public summary must be a JSON object.")
+    try:
+        validate_monthly_public_snapshot(snapshot)
+    except ValueError as exc:
+        if contains_private_text(snapshot):
+            raise ValueError("Existing website summary failed privacy validation.") from exc
     return snapshot
 
 
@@ -377,9 +401,8 @@ def material_changed_fields(existing: dict[str, Any] | None, incoming: dict[str,
     if existing is None:
         return sorted(key for key in incoming if key not in {"generated_at", "freshness_minutes"})
     ignored = {"generated_at", "freshness_minutes"}
-    return sorted(
-        key for key in incoming if key not in ignored and existing.get(key) != incoming.get(key)
-    )
+    keys = (set(existing) | set(incoming)) - ignored
+    return sorted(key for key in keys if existing.get(key) != incoming.get(key))
 
 
 def snapshot_hash(snapshot: dict[str, Any]) -> str:
@@ -510,7 +533,7 @@ def proposed_diff(source_path: Path, website_repo_path: Path | None = None) -> s
     source = load_monthly_public_snapshot(source_path)
     source_text = json.dumps(source, indent=2, sort_keys=True) + "\n"
     if destination.exists():
-        load_monthly_public_snapshot(destination)
+        load_existing_monthly_public_snapshot(destination)
         existing_text = destination.read_text(encoding="utf-8")
     else:
         existing_text = ""

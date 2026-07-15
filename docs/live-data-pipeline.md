@@ -33,7 +33,7 @@ python -m src.live run
 
 ## Recommended Schedule
 
-- SolaX live collection: every 15 minutes.
+- SolaX live collection: use the interval in `config/wattson.yaml` (currently 15 minutes).
 - Octopus tariff refresh: daily.
 - Full financial rebuild: daily after successful tariff refresh and historical data processing.
 - Public snapshot: after successful collection and validation.
@@ -91,7 +91,7 @@ data/public/wattson-monthly-summary.json
 copied to:
 
 ```text
-../kevinwatson.dev/src/data/wattson-monthly-summary.json
+../kevinwatson.dev/src/data/wattson-summary.json
 ```
 
 The monthly public summary may contain only:
@@ -134,9 +134,9 @@ Set `WATTSON_WEBSITE_REPO_PATH` to override the default sibling checkout path.
 
 1. builds and validates the monthly public summary;
 2. validates the target website repository;
-3. copies only `wattson-monthly-summary.json`;
+3. copies only the local `wattson-monthly-summary.json` artefact to the website's stable `wattson-summary.json`;
 4. runs the website checks;
-5. stages only `src/data/wattson-monthly-summary.json`;
+5. stages only `src/data/wattson-summary.json`;
 6. commits with `data: update Wattson public snapshot`;
 7. pushes to `origin/main`;
 8. records the source snapshot hash and website commit hash in the ignored live SQLite store.
@@ -154,7 +154,7 @@ python -m src.live build-public-snapshot
 python -m src.live publish-monthly-summary
 ```
 
-The publication command stages, commits and pushes only `src/data/wattson-monthly-summary.json` when all checks pass. Pushing to the website repository's `main` branch triggers its existing GitHub Pages workflow.
+The publication command stages, commits and pushes only `src/data/wattson-summary.json` when all checks pass. Pushing to the website repository's `main` branch triggers its existing GitHub Pages workflow.
 
 For development on Windows, create a Task Scheduler task that runs every 15 minutes:
 
@@ -181,7 +181,7 @@ Automated publication should use a GitHub Actions workflow that:
 3. restores Python dependencies;
 4. runs the read-only collectors and snapshot builder;
 5. runs `python -m src.live publish-monthly-summary`;
-6. commits and pushes only `src/data/wattson-monthly-summary.json` in the website repository when a new reporting month is eligible.
+6. commits and pushes only `src/data/wattson-summary.json` in the website repository when a new reporting month is eligible.
 
 Required automation inputs:
 

@@ -1,0 +1,62 @@
+schema_version: 1
+
+site:
+  public_region: "Midlands, UK"
+  timezone: "Europe/London"
+
+solar:
+  panel_count: 16
+  panel_rating_kw: 0.4
+  installed_capacity_kwp: 6.4
+  orientation:
+    description: "approximately due south"
+    azimuth_deg: 180
+  roof_pitch_deg: 38
+  significant_shading: false
+  mounting: "fixed_roof"
+
+inverter:
+  manufacturer: "SolaX"
+  model: "X1 Hybrid G4"
+
+battery:
+  manufacturer: "SolaX"
+  model_family: "T30"
+  nominal_capacity_kwh: 6.0
+  usable_capacity_kwh: 6.0
+  minimum_soc_percent: 10
+  maximum_soc_percent: 100
+  charge_power_limit_kw: null
+  discharge_power_limit_kw: null
+  charge_efficiency: null
+  discharge_efficiency: null
+
+tariff:
+  supplier: "Octopus Energy"
+  current_import_product: "Flux"
+  current_export_product: "Flux"
+
+financial:
+  installation_cost_gbp: 13000
+  installation_date: "2023-01-24"
+  discount_rate_annual: 0.05
+  include_degradation: false
+  public_finance_model: "opportunity_cost"
+
+weather:
+  provider: "open_meteo"
+  forecast_collection_interval_hours: 3
+  observation_refresh_interval_hours: 24
+  pvgis:
+    enabled: true
+    system_loss_percent: null
+
+collection:
+  solax_interval_minutes: 15
+  octopus_refresh_interval_hours: 24
+  public_update_frequency: "monthly"
+
+publication:
+  public_summary_filename: "wattson-summary.json"
+  public_location_precision: "region_only"
+  allow_live_household_data: false

@@ -10,36 +10,42 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from config.loader import load_wattson_config
 from models.payback import CapitalEvent, PaybackSummary
 
 DEFAULT_FINANCIAL_DIR = Path("data/processed/financial")
-DEFAULT_INSTALLATION_COST = 13_000.0
-DEFAULT_ANNUAL_DISCOUNT_RATE = 0.05
-DEFAULT_INSTALLATION_DATE = date(2023, 1, 24)
 DEFAULT_PROJECTION_YEARS = 25
 
 
 def run_payback_pipeline(
     financial_dir: Path = DEFAULT_FINANCIAL_DIR,
-    installation_cost: float = DEFAULT_INSTALLATION_COST,
-    annual_discount_rate: float = DEFAULT_ANNUAL_DISCOUNT_RATE,
-    installation_date: date = DEFAULT_INSTALLATION_DATE,
+    installation_cost: float | None = None,
+    annual_discount_rate: float | None = None,
+    installation_date: date | None = None,
     capital_events: list[CapitalEvent] | None = None,
 ) -> PaybackSummary:
+    wattson = load_wattson_config()
+    resolved_installation_cost = installation_cost or wattson.financial.installation_cost_gbp
+    resolved_discount_rate = (
+        annual_discount_rate
+        if annual_discount_rate is not None
+        else wattson.financial.discount_rate_annual
+    )
+    resolved_installation_date = installation_date or wattson.financial.installation_date
     financial_dir.mkdir(parents=True, exist_ok=True)
     historical = read_historical_monthly_benefits(financial_dir / "monthly_financial_summary.csv")
     projected = build_projected_cash_flows(
         historical,
-        installation_cost=installation_cost,
-        annual_discount_rate=annual_discount_rate,
-        installation_date=installation_date,
+        installation_cost=resolved_installation_cost,
+        annual_discount_rate=resolved_discount_rate,
+        installation_date=resolved_installation_date,
         capital_events=capital_events or [],
     )
     summary = build_payback_summary(
         projected,
-        installation_cost=installation_cost,
-        annual_discount_rate=annual_discount_rate,
-        installation_date=installation_date,
+        installation_cost=resolved_installation_cost,
+        annual_discount_rate=resolved_discount_rate,
+        installation_date=resolved_installation_date,
     )
 
     write_parquet(projected, financial_dir / "payback_projected_cash_flows.parquet")
@@ -243,8 +249,8 @@ def build_payback_summary(
         projection_end_date=pd.to_datetime(cash_flows["cash_flow_date"]).dt.date.max(),
         calculation_status="projected_from_measured_history",
         modelling_assumptions=[
-            "Installation cost is 13000 GBP.",
-            "Annual discount/opportunity-cost rate is 5%, converted to an effective monthly rate.",
+            f"Installation cost is {installation_cost:.0f} GBP.",
+            "Annual discount/opportunity-cost rate is configured centrally and converted to an effective monthly rate.",
             "Historical benefits use confirmed SolaX and Octopus monthly financial results.",
             "Future monthly benefits use the measured calendar-month seasonal profile.",
             "Tariffs and system performance are held constant in real terms.",

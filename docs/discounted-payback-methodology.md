@@ -6,8 +6,8 @@ This document describes Wattson's discounted payback and NPV projection layer.
 
 The model uses:
 
-- installation cost: `13000 GBP`;
-- annual discount or opportunity-cost rate: `5%`;
+- installation cost, installation date and annual discount or opportunity-cost rate from
+  `config/wattson.yaml`;
 - confirmed historical monthly benefits from the SolaX and Octopus financial pipeline;
 - no panel, inverter or battery degradation assumption;
 - no electricity-price inflation assumption;
@@ -17,7 +17,7 @@ The model does not include personal loans, mortgage rates, deposits, repayment h
 
 ## Installation Date
 
-The current default installation and benefit-start date is `2023-01-24`, matching the start of the validated SolaX historical dataset. If a more precise commissioning date is later confirmed, it should be moved into configuration and the projection regenerated.
+The current installation and benefit-start date is configured in `config/wattson.yaml`. If a more precise commissioning date is later confirmed, update the configuration and regenerate the projection.
 
 ## Historical Cash Flows
 
